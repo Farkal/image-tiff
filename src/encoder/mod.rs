@@ -1,10 +1,11 @@
 use byteorder::NativeEndian;
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
-use std::io::{Seek, Write};
+use std::io::{Cursor, Seek, Write};
 use std::mem;
+use lzw::{EncoderTIFF, MsbWriter};
 
-use tags::{self, ResolutionUnit, Tag, Type};
+use tags::{self, ResolutionUnit, Tag, Type, CompressionMethod};
 use error::{TiffError, TiffFormatError, TiffResult};
 
 pub mod colortype;
@@ -393,8 +394,17 @@ impl<W: Write + Seek> TiffEncoder<W> {
         width: u32,
         height: u32,
     ) -> TiffResult<ImageEncoder<W, C>> {
+        self.new_image_with_compression(width, height, CompressionMethod::None)
+    }
+
+    pub fn new_image_with_compression<C: ColorType>(
+        &mut self,
+        width: u32,
+        height: u32,
+        compression_method: CompressionMethod,
+    ) -> TiffResult<ImageEncoder<W, C>> {
         let encoder = DirectoryEncoder::new(&mut self.writer)?;
-        ImageEncoder::new(encoder, width, height)
+        ImageEncoder::new(encoder, width, height, compression_method)
     }
 
     /// Convenience function to write an entire image from memory.
@@ -407,8 +417,22 @@ impl<W: Write + Seek> TiffEncoder<W> {
     where
         [C::Inner]: TiffValue,
     {
+        self.write_image_with_compression::<C>(width, height, data, CompressionMethod::None)
+    }
+
+    /// Convenience function to write an entire image from memory.
+    pub fn write_image_with_compression<C: ColorType>(
+        &mut self,
+        width: u32,
+        height: u32,
+        data: &[C::Inner],
+        compression_method: CompressionMethod,
+    ) -> TiffResult<()>
+    where
+        [C::Inner]: TiffValue,
+    {
         let encoder = DirectoryEncoder::new(&mut self.writer)?;
-        let image: ImageEncoder<W, C> = ImageEncoder::new(encoder, width, height)?;
+        let image: ImageEncoder<W, C> = ImageEncoder::new(encoder, width, height, compression_method)?;
         image.write_data(data)
     }
 }
@@ -560,6 +584,7 @@ pub struct ImageEncoder<'a, W: 'a + Write + Seek, C: ColorType> {
     strip_offsets: Vec<u32>,
     strip_byte_count: Vec<u32>,
     dropped: bool,
+    compression_method: CompressionMethod,
     _phantom: ::std::marker::PhantomData<C>,
 }
 
@@ -568,6 +593,7 @@ impl<'a, W: 'a + Write + Seek, T: ColorType> ImageEncoder<'a, W, T> {
         mut encoder: DirectoryEncoder<'a, W>,
         width: u32,
         height: u32,
+        compression_method: CompressionMethod,
     ) -> TiffResult<ImageEncoder<'a, W, T>> {
         let row_samples = u64::from(width) * u64::try_from(<T>::BITS_PER_SAMPLE.len())?;
         let row_bytes = row_samples * u64::from(<T::Inner>::BYTE_LEN);
@@ -579,7 +605,7 @@ impl<'a, W: 'a + Write + Seek, T: ColorType> ImageEncoder<'a, W, T> {
 
         encoder.write_tag(Tag::ImageWidth, width)?;
         encoder.write_tag(Tag::ImageLength, height)?;
-        encoder.write_tag(Tag::Compression, tags::CompressionMethod::None.to_u16())?;
+        encoder.write_tag(Tag::Compression, compression_method.to_u16())?;
 
         encoder.write_tag(Tag::BitsPerSample, <T>::BITS_PER_SAMPLE)?;
         encoder.write_tag(Tag::PhotometricInterpretation, <T>::TIFF_VALUE.to_u16())?;
@@ -602,6 +628,7 @@ impl<'a, W: 'a + Write + Seek, T: ColorType> ImageEncoder<'a, W, T> {
             strip_offsets: Vec::new(),
             strip_byte_count: Vec::new(),
             dropped: false,
+            compression_method,
             _phantom: ::std::marker::PhantomData,
         })
     }
@@ -634,7 +661,27 @@ impl<'a, W: 'a + Write + Seek, T: ColorType> ImageEncoder<'a, W, T> {
                 "Slice is wrong size for strip").into());
         }
 
-        let offset = self.encoder.write_data(value)?;
+        let offset = match self.compression_method {
+            CompressionMethod::LZW => {
+                let mut data = vec![];
+                {
+                    let mut buf = TiffWriter::new(Cursor::new(&mut data));
+                    value.write(&mut buf)?;
+
+                }
+                let mut compressed = vec![];
+                {
+                    let mut lzw_encoder = EncoderTIFF::new(MsbWriter::new(&mut compressed), 8)?;
+                    lzw_encoder.encode_bytes(&data[..])?;
+                }
+                self.encoder.write_data(&compressed[..])?
+            },
+            _ => {
+                self.encoder.write_data(value)?
+            }
+
+        };
+
         self.strip_offsets.push(u32::try_from(offset)?);
         self.strip_byte_count.push(value.bytes());
 
