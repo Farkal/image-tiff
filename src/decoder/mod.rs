@@ -369,6 +369,10 @@ impl<R: Read + Seek> Decoder<R> {
         }
     }
 
+    pub fn get_sample_format(&self) -> TiffResult<Vec<SampleFormat>> {
+        Ok(self.sample_format.clone())
+    }
+
     fn read_header(&mut self) -> TiffResult<()> {
         let mut endianess = Vec::with_capacity(2);
         self.reader.by_ref().take(2).read_to_end(&mut endianess)?;
