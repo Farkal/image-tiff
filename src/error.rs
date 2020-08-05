@@ -23,6 +23,9 @@ pub enum TiffError {
     /// The Limits of the Decoder is exceeded.
     LimitsExceeded,
 
+    // If the file limit is reached we return the byte value exepected to be reached 
+    DataUnreachable(u64),
+
     /// An integer conversion to or from a platform size failed, either due to
     /// limits of the platform size or limits of the format.
     IntSizeError,
@@ -179,6 +182,7 @@ impl fmt::Display for TiffError {
             ),
             TiffError::IoError(ref e) => e.fmt(fmt),
             TiffError::LimitsExceeded => write!(fmt, "The Decoder limits are exceeded"),
+            TiffError::DataUnreachable(size) => write!(fmt, "The value at {} exceed the file limit", size),
             TiffError::IntSizeError => write!(fmt, "Platform or format size limits exceeded"),
         }
     }
@@ -190,6 +194,7 @@ impl Error for TiffError {
             TiffError::FormatError(..) => "Format error",
             TiffError::UnsupportedError(..) => "Unsupported error",
             TiffError::IoError(..) => "IO error",
+            TiffError::DataUnreachable(..) => "Data Unreachable",
             TiffError::LimitsExceeded => "Decoder limits exceeded",
             TiffError::IntSizeError => "Platform or format size limits exceeded",
         }

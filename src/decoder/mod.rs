@@ -163,6 +163,8 @@ pub struct Limits {
     /// The maximum size of any ifd value in bytes, the default is
     /// 1MiB.
     pub ifd_value_size: usize,
+    // Allow to specify a file limit to be raise error if decoding of the data would be impossible (for cloud range request purpose)
+    pub file_limit: Option<usize>,
     /// The purpose of this is to prevent all the fields of the struct from
     /// being public, as this would make adding new fields a major version
     /// bump.
@@ -174,6 +176,7 @@ impl Default for Limits {
         Limits {
             decoding_buffer_size: 256 * 1024 * 1024,
             ifd_value_size: 1024 * 1024,
+            file_limit: None,
             _non_exhaustive: (),
         }
     }
@@ -549,15 +552,20 @@ impl<R: Read + Seek> Decoder<R> {
 
     /// Moves the cursor to the specified offset
     #[inline]
-    pub fn goto_offset(&mut self, offset: u32) -> io::Result<()> {
+    pub fn goto_offset(&mut self, offset: u32) -> TiffResult<()> {
         self.goto_offset_u64(offset.into())
     }
 
     #[inline]
-    pub fn goto_offset_u64(&mut self, offset: u64) -> io::Result<()> {
+    pub fn goto_offset_u64(&mut self, offset: u64) -> TiffResult<()> {
+        if let Some(file_limit) = self.limits.file_limit {
+            if (file_limit as u64) < offset {
+                return Err(TiffError::DataUnreachable(offset))
+            }
+        }
         self.reader
-            .seek(io::SeekFrom::Start(offset))
-            .map(|_| ())
+            .seek(io::SeekFrom::Start(offset))?;
+        Ok(())
     }
 
     /// Reads a IFD entry.
@@ -600,15 +608,26 @@ impl<R: Read + Seek> Decoder<R> {
     /// Reads the next IFD
     fn read_ifd(&mut self) -> TiffResult<Directory> {
         let mut dir: Directory = HashMap::new();
-        match self.next_ifd {
+        let offset = match self.next_ifd {
             None => {
                 return Err(TiffError::FormatError(
                     TiffFormatError::ImageFileDirectoryNotFound,
                 ))
             }
-            Some(offset) => self.goto_offset_u64(offset)?,
-        }
+            Some(offset) => {
+                self.goto_offset_u64(offset)?;
+                offset
+            },
+        };
         let num_tags = if self.bigtiff { self.read_long8()? } else { self.read_short()?.into() };
+
+        if let Some(file_limit) = self.limits.file_limit {
+            let tag_size = if self.bigtiff { 20 } else { 12 };
+            if (file_limit as u64) < offset + num_tags * tag_size {
+                return Err(TiffError::DataUnreachable(offset + num_tags * tag_size))
+            }
+        }
+
         for _ in 0..num_tags {
             let (tag, entry) = match self.read_entry()? {
                 Some(val) => val,
