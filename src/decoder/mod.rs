@@ -164,7 +164,7 @@ pub struct Limits {
     /// 1MiB.
     pub ifd_value_size: usize,
     // Allow to specify a file limit to be raise error if decoding of the data would be impossible (for cloud range request purpose)
-    pub file_limit: Option<usize>,
+    pub file_limit: Option<u64>,
     /// The purpose of this is to prevent all the fields of the struct from
     /// being public, as this would make adding new fields a major version
     /// bump.
