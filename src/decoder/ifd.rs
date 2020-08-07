@@ -351,14 +351,14 @@ impl Entry {
                 (Type::BYTE, 4) => offset_to_bytes(4, self),
                 (Type::BYTE, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(UnsignedBig(u64::from(decoder.read_byte()?)))
-                }),
+                }, 1),
                 (Type::SBYTE, 1) => Ok(Signed(i32::from(self.offset[0] as i8))),
                 (Type::SBYTE, 2) => offset_to_sbytes(2, self),
                 (Type::SBYTE, 3) => offset_to_sbytes(3, self),
                 (Type::SBYTE, 4) => offset_to_sbytes(4, self),
                 (Type::SBYTE, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(SignedBig(i64::from(decoder.read_byte()? as i8)))
-                }),
+                }, 1),
                 (Type::SHORT, 1) => Ok(Unsigned(u32::from(self.r(bo).read_u16()?))),
                 (Type::SSHORT, 1) => Ok(Signed(i32::from(self.r(bo).read_i16()?))),
                 (Type::SHORT, 2) => {
@@ -377,30 +377,30 @@ impl Entry {
                 }
                 (Type::SHORT, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(UnsignedBig(u64::from(decoder.read_short()?)))
-                }),
+                }, 2),
                 (Type::SSHORT, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(SignedBig(i64::from(decoder.read_sshort()?)))
-                }),
+                }, 2),
                 (Type::LONG, 1) => Ok(Unsigned(self.r(bo).read_u32()?)),
                 (Type::SLONG, 1) => Ok(Signed(self.r(bo).read_i32()?)),
                 (Type::LONG, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(Unsigned(decoder.read_long()?))
-                }),
+                }, 4),
                 (Type::SLONG, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(Signed(decoder.read_slong()?))
-                }),
+                    }, 4),
                 (Type::FLOAT, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(Float(decoder.read_float()?))
-                }),
+                }, 4),
                 (Type::DOUBLE, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                         Ok(Double(decoder.read_double()?))
-                }),
+                }, 8),
                 (Type::RATIONAL, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(Rational(decoder.read_long()?, decoder.read_long()?))
-                }),
+                }, 4),
                 (Type::SRATIONAL, n) => self.decode_offset(n, bo, limits, decoder, |decoder| {
                     Ok(SRational(decoder.read_slong()?, decoder.read_slong()?))
-                }),
+                }, 4),
                 (Type::ASCII, n) => {
                     let n = usize::try_from(n)?;
                     if n > limits.decoding_buffer_size {
@@ -431,7 +431,7 @@ impl Entry {
     }
 
     #[inline]
-    fn decode_offset<R, F>(&self, value_count: u64, bo: ByteOrder, limits: &super::Limits, decoder: &mut super::Decoder<R>, decode_fn: F) -> TiffResult<Value>
+    fn decode_offset<R, F>(&self, value_count: u64, bo: ByteOrder, limits: &super::Limits, decoder: &mut super::Decoder<R>, decode_fn: F, value_bytes: usize) -> TiffResult<Value>
         where
             R: Read + Seek,
             F: Fn(&mut super::Decoder<R>) -> TiffResult<Value>,
@@ -442,11 +442,19 @@ impl Entry {
         }
 
         let mut v = Vec::with_capacity(value_count);
+        let offset;
         if decoder.bigtiff {
-            decoder.goto_offset_u64(self.r(bo).read_u64()?)?
+            offset = self.r(bo).read_u64()?;
         } else {
-            decoder.goto_offset(self.r(bo).read_u32()?)?
+            offset = self.r(bo).read_u32()?.into();
         }
+        
+        if let Some(file_limit) = limits.file_limit {
+            if file_limit < offset + (value_count * value_bytes) as u64 {
+                return Err(TiffError::DataUnreachable(offset + (value_count * value_bytes) as u64));
+            }
+        }
+        decoder.goto_offset_u64(offset)?;
         for _ in 0..value_count {
             v.push(decode_fn(decoder)?)
         }
