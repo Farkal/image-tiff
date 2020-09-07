@@ -354,7 +354,7 @@ impl<R: Read + Seek> Decoder<R> {
                 }
             },
             PhotometricInterpretation::BlackIsZero | PhotometricInterpretation::WhiteIsZero
-                if self.bits_per_sample.len() == 1 =>
+                =>
             {
                 Ok(ColorType::Gray(self.bits_per_sample[0]))
             }
@@ -461,7 +461,12 @@ impl<R: Read + Seek> Decoder<R> {
             1 | 3 | 4 => if let Some(val) = self.find_tag_unsigned_vec(Tag::BitsPerSample)? {
                 self.bits_per_sample = val;
             },
-            _ => return Err(TiffUnsupportedError::UnsupportedSampleDepth(self.samples).into()),
+            _ => match self.photometric_interpretation {
+                PhotometricInterpretation::BlackIsZero | PhotometricInterpretation::WhiteIsZero => if let Some(val) = self.find_tag_unsigned_vec(Tag::BitsPerSample)? {
+                    self.bits_per_sample = val;
+                },
+                _ => return Err(TiffUnsupportedError::UnsupportedSampleDepth(self.samples).into()),
+            }
         }
         Ok(())
     }
